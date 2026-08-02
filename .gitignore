@@ -1,0 +1,15 @@
+node_modules/
+.env
+.env.*
+*.log
+logs/
+tmp/
+coverage/
+dist/
+outputs/
+raw/
+*.xlsx
+*.xls
+*.csv
+.DS_Store
+Thumbs.db
