@@ -1,8 +1,10 @@
-# EmoAI Affect Engine v0.1
+# EmoAI Affect Engine v0.2.0
 
 EmoAI is a generic neuro-inspired affect regulation layer for LLM agents. It turns structured appraisal signals into a persistent affect state, relationship state, memory pressure, and prompt fragments that can modulate the next model response.
 
 This package is intentionally generic. It does not include any concrete character, game scene, product persona, test dialogue, provider configuration, API key, local state, or deployment log.
+
+Version 0.2 adds a stronger affect-expression contract: quiet signals can still color wording, while clear or explicit affect can alter relational distance, trust posture, initiative, repair behavior, and response cadence. The engine also separates task setbacks from player-caused relational harm and exposes regression-testable state transitions.
 
 ## What It Does
 
@@ -12,6 +14,9 @@ This package is intentionally generic. It does not include any concrete characte
 - Applies history, relationship, uncertainty, and current arousal multipliers to stimulus strength.
 - Creates affective memory traces with salience, detail level, persistence pressure, and retrieval bias.
 - Produces internal prompt fragments that regulate tone, distance, initiative, caution, repair, and affect visibility.
+- Produces structured decision and expression contracts for predictable host-model integration.
+- Preserves continuous low-level affect without forcing repetitive emotion announcements.
+- Uses explicit or evidence-backed attribution before changing player-facing relationship state.
 
 ## What It Does Not Do
 
@@ -39,7 +44,7 @@ EmoAI should be treated as a high-priority internal body-state mechanism inside 
 
 ## Quick Start
 
-Run npm run smoke.
+Run `npm run smoke` and `node scripts/regression.js`.
 
 The runtime reads JSON from stdin and writes JSON to stdout.
 
@@ -59,3 +64,7 @@ The host application should insert result.system_context and result.response_con
 - docs/APPRAISAL_SPEC.md: field definitions.
 - docs/INTEGRATION.md: integration guidance.
 - examples/hermes_adapter: minimal adapter notes, with no credentials or local paths.
+
+## Release
+
+The current release is `v0.2.0`. See [PATCH_NOTES.md](PATCH_NOTES.md) for the changes in this version.
