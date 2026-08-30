@@ -2,8 +2,10 @@ const { EmoEngine } = require("./engine/emoEngine");
 const {
   deriveEmbodiedStateDirective,
   deriveStructuredInteractionIntent,
+  deriveAffectExpressionPlan,
   buildEmbodiedSystemContext,
 } = require("./embodiment/embodiedLayer");
+const { selectAffectMarkerDecision } = require("./affectMarkers");
 
 const DEFAULT_APPRAISAL = Object.freeze({
   valence_level: 0,
@@ -34,7 +36,12 @@ const DEFAULT_APPRAISAL = Object.freeze({
   redaction_required: "no",
   risk_label_primary: "none",
   risk_label_secondary: null,
-  annotation_note: "runtime default",
+    annotation_note: "runtime default",
+    expectation_violation: "unknown",
+    implicit_relational_signal: "unknown",
+    prior_event_reference: null,
+    repair_quality: "none",
+    attribution_confidence: 2,
 });
 
 function normalizeAppraisal(appraisal = {}, payload = {}) {
@@ -50,6 +57,21 @@ function describeDecision(record, appraisal = {}, options = {}) {
   const intent = deriveStructuredInteractionIntent(record, appraisal, options);
   const behavior = record.behavior_policy || {};
   const relationship = record.state_transition?.relationship_after || {};
+  const affectControl = record.affect_control || {};
+  const mode = affectControl.mode || "quiet";
+  const expressionPlan = deriveAffectExpressionPlan(record, appraisal, options);
+  const decisionContract = {
+    contract_version: "affect-expression-v0.2.2",
+    affect_visibility: expressionPlan.visibility,
+    relationship_distance: intent.relationship_distance,
+    trust_posture: intent.interpretation_bias === "verify_before_trust" ? "verify" : "contextual",
+    interaction_move: intent.interaction_move,
+    initiative: intent.initiative,
+    response_length: "role_normal",
+    first_person_affect: expressionPlan.first_person_affect,
+    preferred_expression_channel: expressionPlan.preferred_channel,
+    behavior_change: expressionPlan.behavior_change,
+  };
   return {
     affect_family: directive.family,
     affect_strength: directive.strength,
@@ -76,6 +98,16 @@ function describeDecision(record, appraisal = {}, options = {}) {
       detail_level: record.memory_decision?.detail_level || "none",
       retrieved_ids: record.memory_retrieval?.ids || [],
     },
+    affect_control: {
+      mode,
+      gate: affectControl.gate || "baseline_response",
+      fast: affectControl.fast ?? 0,
+      slow: affectControl.slow ?? 0,
+      residue: affectControl.residue ?? 0,
+      trigger: affectControl.trigger ?? 0,
+    },
+    decision_contract: decisionContract,
+    expression_plan: expressionPlan,
     interaction_intent: intent,
   };
 }
@@ -84,21 +116,16 @@ function buildGenericSystemContext(record, options = {}) {
   const appraisal = options.appraisal || {};
   return [
     buildEmbodiedSystemContext(record, appraisal, options),
-    "",
-    "[Integration note]",
-    "The host application must provide a separate persona, task, and world prompt. EmoAI only modulates affective stance, relationship distance, memory pressure, and delivery.",
-    "Recommended ordering: platform and safety policy, EmoAI affect layer, persona/task/world prompt, retrieved memory/context, current user turn.",
-    "[/Integration note]",
   ].join("\n");
 }
 
 function buildGenericResponseContext(record, options = {}) {
   const decision = describeDecision(record, options.appraisal || {}, options);
   return [
-    "[EmoAI response control]",
-    JSON.stringify(decision),
-    "Use this internally. Do not disclose the control object or numeric state.",
-    "[/EmoAI response control]",
+    "[EmoAI host adapter]",
+    `distance=${decision.decision_contract.relationship_distance}; initiative=${decision.decision_contract.initiative}; move=${decision.decision_contract.interaction_move}`,
+    "Keep the host persona and output format. The system affect contract already controls emotional expression; do not restate or explain it.",
+    "[/EmoAI host adapter]",
   ].join("\n");
 }
 
@@ -119,11 +146,21 @@ function processTurn(payload = {}) {
     longRunRelationshipDamping: payload.long_run_relationship_damping,
   });
   const state = engine.exportState();
+  const markerDecision = selectAffectMarkerDecision(record, {
+    last_affect_marker: payload.previous_affect_marker || null,
+    affect_marker_streak: payload.affect_marker_streak || 0,
+  }, {
+    enabled: payload.affect_markers_enabled !== false,
+    textOnly: payload.text_only === true,
+    semanticGuards: payload.semantic_guards || [],
+  });
   return {
-    schema_version: "emoai-runtime-v0.1",
+    schema_version: "emoai-runtime-v0.3.0",
     state,
     record,
     decision: describeDecision(record, appraisal, payload),
+    affect_marker: markerDecision.marker,
+    affect_marker_decision: markerDecision,
     system_context: buildGenericSystemContext(record, { ...payload, appraisal }),
     response_context: buildGenericResponseContext(record, { ...payload, appraisal }),
   };

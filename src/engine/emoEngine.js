@@ -4,6 +4,8 @@ const TARGET_KEYS = ["agent", "user", "third_party", "shared_task", "none", "unk
 const HARMFUL_RELATIONSHIP_EVENTS = new Set(["threat", "rejection", "dominance"]);
 const NEGATIVE_UNRESOLVED_EVENTS = new Set(["threat", "rejection", "goal_block", "dominance", "ambiguity"]);
 const POSITIVE_RESOLVED_EVENTS = new Set(["reward", "attachment", "goal_progress", "care_signal", "repair_signal"]);
+const RELATIONAL_CAUSAL_EVENTS = new Set(["rejection", "attachment", "care_signal", "repair_signal", "dominance"]);
+const TASK_CAUSAL_EVENTS = new Set(["threat", "goal_progress", "goal_block", "novelty_event", "ambiguity"]);
 
 const TARGET_ALIASES = Object.freeze({
   assistant: "agent",
@@ -28,6 +30,14 @@ const clamp = (value, min = 0, max = 1) => Math.min(max, Math.max(min, Number(va
 const round = (value, digits = 6) => Number(Number(value).toFixed(digits));
 const emptyVector = (keys, value = 0) => Object.fromEntries(keys.map((key) => [key, value]));
 const clone = (value) => JSON.parse(JSON.stringify(value));
+const emptyRelationalResidue = () => ({
+  hurt: 0,
+  trust_debt: 0,
+  conflict_debt: 0,
+  unresolved_memory: 0,
+  repair_credit: 0,
+  attachment_momentum: 0,
+});
 
 function canonicalTarget(value, fallback = "unknown") {
   if (value === null || value === undefined || value === "") return fallback;
@@ -120,6 +130,7 @@ function conversationId(appraisal = {}, options = {}) {
     || appraisal.conversation_id
     || appraisal.case_id
     || appraisal.session_id
+    || appraisal.case_blind_id
     || "conversation";
 }
 
@@ -136,11 +147,19 @@ class EmoEngine {
     this.previousOccurredAt = null;
     this.previousEmotion = "neutral";
     this.emotionDuration = 0;
+    this.relationalResidue = emptyRelationalResidue();
+    this.affectLoad = {
+      fast: 0,
+      slow: 0,
+      residue: 0,
+      trigger: 0,
+      mode: "quiet",
+    };
   }
 
   exportState() {
     return {
-      schema_version: "emo-engine-state-v0.1",
+      schema_version: "emo-engine-state-v0.2",
       config_version: this.config.version,
       neuro: clone(this.neuro),
       relationship: clone(this.relationship),
@@ -152,6 +171,8 @@ class EmoEngine {
       previous_occurred_at: this.previousOccurredAt,
       previous_emotion: this.previousEmotion,
       emotion_duration: this.emotionDuration,
+      relational_residue: clone(this.relationalResidue),
+      affect_load: clone(this.affectLoad),
     };
   }
 
@@ -190,6 +211,22 @@ class EmoEngine {
     this.previousOccurredAt = typeof state.previous_occurred_at === "string" ? state.previous_occurred_at : null;
     this.previousEmotion = typeof state.previous_emotion === "string" ? state.previous_emotion : "neutral";
     this.emotionDuration = Number.isInteger(state.emotion_duration) && state.emotion_duration >= 0 ? state.emotion_duration : 0;
+    this.relationalResidue = {
+      ...emptyRelationalResidue(),
+      ...(state.relational_residue || {}),
+    };
+    for (const key of Object.keys(emptyRelationalResidue())) {
+      this.relationalResidue[key] = clamp(Number(this.relationalResidue[key] || 0));
+    }
+    this.affectLoad = {
+      fast: clamp(Number(state.affect_load?.fast || 0)),
+      slow: clamp(Number(state.affect_load?.slow || 0)),
+      residue: clamp(Number(state.affect_load?.residue || 0)),
+      trigger: clamp(Number(state.affect_load?.trigger || 0)),
+      mode: ["quiet", "implicit", "clear", "explicit"].includes(state.affect_load?.mode)
+        ? state.affect_load.mode
+        : "quiet",
+    };
     return this;
   }
 
@@ -237,40 +274,48 @@ class EmoEngine {
   }
 
   deriveEventAttribution(appraisal, raw, effective) {
+    const evidence = String(appraisal.current_evidence_quote || appraisal.input || "");
     const events = effective?.dominant_events || [];
-    const negative = raw.valence < 0 || events.some((event) => HARMFUL_RELATIONSHIP_EVENTS.has(event));
-    const suppliedCausalAgent = appraisal.causal_agent || appraisal.attribution_causal_agent;
-    const causalAgent = suppliedCausalAgent
-      ? canonicalActor(suppliedCausalAgent)
-      : raw.social_target === "agent"
-        ? "user"
-        : raw.social_target === "shared_task"
-          ? "shared_task"
-          : "unknown";
-    const relationshipTarget = canonicalActor(
-      appraisal.relationship_target,
-      raw.social_target === "agent" && causalAgent === "user" ? "user" : "none",
-    );
-    const relationshipEligible = relationshipTarget !== "none"
-      && relationshipTarget !== "unknown"
-      && raw.social_target === "agent"
-      && causalAgent === relationshipTarget;
+    const isNegative = raw.valence < 0 || events.some((event) => HARMFUL_RELATIONSHIP_EVENTS.has(event));
+    const environmentCue = /(?:门锁|锈死|撬杆|星盘|裂成|塌方|落石|钟声|风暴|火光|山口|入口|纹丝不动|机关|陷阱|道路|桥|天亮|傍晚|夜色|雨|雪|雾|追兵|猎户)/u.test(evidence);
+    const playerFaultCue = /(?:我(?:故意|骗|撒谎|泄密|出卖|背叛|失约|忘了|弄丢|打碎|砸|偷|瞒|隐瞒|骗你)|(?:瞒了你|瞒着你|隐瞒了你|骗了你|替你决定|拿你的善意|没告诉你|没有告诉你|没跟你说|没有跟你说|不告诉你|藏起来|藏回|藏着不说|先过了桥再说|没必要每件事都停下来|别又开始摆脸色|还没断)|是我(?:把|弄|打|砸|骗|泄|偷)|怪我|我错了|我承认|我道歉)/u.test(evidence);
+    const interpersonalCue = /(?:你(?:别|不要|不许|必须|给我|欠我|太|真|根本|什么都)|我(?:讨厌|恨|喜欢|爱|信你|骗你|背叛你)|对不起|抱歉|谢谢|承诺|答应)/u.test(evidence);
+    const experiencer = raw.social_target === "agent" ? "npc"
+      : raw.social_target === "user" ? "player"
+        : raw.social_target === "shared_task" ? "shared_task" : "unknown";
+    const assistantTargeted = raw.social_target === "agent";
+    const repairCue = /(?:对不起|抱歉|道歉|认错|责任|补救|补偿|按约|守约|不再藏|不再瞒|把事实说完|一起决定)/u.test(evidence);
+    const explicitCausal = canonicalTarget(appraisal.causal_agent, "unknown");
+    const explicitCausalAgent = explicitCausal === "user" ? "player" : explicitCausal;
+    const causalAgent = explicitCausalAgent !== "unknown"
+      ? explicitCausalAgent
+      : playerFaultCue || repairCue || (interpersonalCue && assistantTargeted)
+        ? "player"
+        : environmentCue ? "environment"
+          : raw.social_target === "shared_task" ? "shared_task" : "unknown";
+    const relationshipTarget = assistantTargeted && causalAgent === "player" ? "player" : "none";
+    const relationshipEligible = relationshipTarget === "player";
     return {
-      experiencer: raw.social_target,
+      experiencer,
       causal_agent: causalAgent,
       relationship_target: relationshipTarget,
+      environment_cue: environmentCue,
+      player_fault_cue: playerFaultCue,
+      interpersonal_cue: interpersonalCue || repairCue,
       relationship_eligible: relationshipEligible,
       reason: relationshipEligible
-        ? "The stimulus is attributed to a relationship counterpart and may update relationship state."
-        : negative
-          ? "The stimulus affects internal affect state but is not safely attributed as a relationship event."
-          : "No relationship-changing attribution was inferred.",
+        ? "玩家可被归因为本轮 NPC 情绪/关系事件来源"
+        : isNegative && environmentCue
+          ? "环境或任务事件只影响 NPC 身体状态，不自动损害玩家关系"
+          : "未识别为玩家造成的人际关系变化",
     };
   }
 
-  computeModulation(raw) {
+  computeModulation(raw, factEvidence = null) {
     const reasons = [];
     const eventGains = {};
+    const factMultipliers = {};
+    const requestedFactMultipliers = factEvidence?.event_multipliers || {};
     const dominant = EVENT_KEYS.filter((event) => raw.events[event] > 0);
     const repeated = dominant.filter((event) => this.previousDominantEvents.includes(event));
     const historyMass = dominant.reduce((sum, event) => sum + this.eventTraces[event], 0);
@@ -286,12 +331,24 @@ class EmoEngine {
       const repeats = this.repeatCounts[event];
       const adaptation = raw.intensity <= 0.5 ? 1 / (1 + repeats * 0.14) : 1 / (1 + repeats * 0.06);
       const unresolved = ["threat", "rejection", "goal_block"].includes(event) ? 1 + Math.min(0.3, this.eventTraces[event] * 0.08) : 1;
-      eventGains[event] = clamp(this.config.personality.eventSensitivity[event] * adaptation * unresolved, 0.25, 2.5);
+      const factMultiplier = dominant.includes(event)
+        ? clamp(requestedFactMultipliers[event] ?? 1, 0.75, 1.35)
+        : 1;
+      factMultipliers[event] = round(factMultiplier);
+      eventGains[event] = clamp(
+        this.config.personality.eventSensitivity[event] * adaptation * unresolved * factMultiplier,
+        0.25,
+        2.5,
+      );
     }
 
     if (repeated.length) reasons.push("Repeated events adapted: " + repeated.join("|"));
     if (historyMass > 0) reasons.push("Historical trace gain=" + round(historyGain, 3));
     if (stateGain > 1) reasons.push("High arousal state gain=" + round(stateGain, 3));
+    const appliedFactEvents = dominant.filter((event) => factMultipliers[event] !== 1);
+    if (appliedFactEvents.length) {
+      reasons.push("Fact adapter gain: " + appliedFactEvents.map((event) => `${event}=${factMultipliers[event]}`).join("|"));
+    }
 
     const combinedRaw = personalityGain * relationshipGain * historyGain * stateGain;
     return {
@@ -301,6 +358,14 @@ class EmoEngine {
       state_gain: round(stateGain),
       certainty_gain: round(raw.certainty),
       event_gains: Object.fromEntries(EVENT_KEYS.map((event) => [event, round(eventGains[event])])),
+      fact_evidence: {
+        schema_version: "emoai-game-fact-adapter-v0.1",
+        current_event_required: true,
+        fact_ids: Array.isArray(factEvidence?.fact_ids) ? [...new Set(factEvidence.fact_ids)].slice(0, 8) : [],
+        matched_events: appliedFactEvents,
+        event_multipliers: Object.fromEntries(EVENT_KEYS.map((event) => [event, factMultipliers[event] ?? 1])),
+        reasons: Array.isArray(factEvidence?.reasons) ? factEvidence.reasons.slice(0, 8) : [],
+      },
       combined_gain_raw: round(combinedRaw),
       combined_gain_bounded: round(clamp(combinedRaw, 0.25, 2.5)),
       lower_bound: 0.25,
@@ -412,7 +477,8 @@ class EmoEngine {
 
   computeRelationshipDelta(raw, effective, postHarmDamping, attribution = null) {
     const delta = emptyVector(RELATIONSHIP_KEYS);
-    if (attribution && attribution.relationship_eligible === false && raw.social_target === "agent") return delta;
+    const userAttachment = raw.social_target === "user" && Number(effective.events.attachment || 0) > 0;
+    if (attribution && attribution.relationship_eligible === false && !userAttachment) return delta;
     const temporalDamping = raw.temporal_orientation === "past" ? 0.35 : 1;
     const defaultTargetGain = this.config.relationshipTargetGain[raw.social_target] ?? 0;
     const eventOverrides = this.config.relationshipEventTargetOverrides[raw.social_target] || {};
@@ -427,7 +493,7 @@ class EmoEngine {
     return Object.fromEntries(RELATIONSHIP_KEYS.map((key) => [key, round(clamp(delta[key], -0.2, 0.2))]));
   }
 
-  deriveEmotion(raw, effective, before, after) {
+  deriveEmotion(raw, effective, before, after, affectControl = {}) {
     const stress = (after.norepinephrine + after.cortisol) / 2;
     const events = effective.dominant_events;
     const negative = raw.valence <= -0.3;
@@ -438,6 +504,7 @@ class EmoEngine {
     const warmLoad = Math.max(0, after.oxytocin - this.config.baseline.oxytocin) * 0.9
       + Math.max(0, after.serotonin - this.config.baseline.serotonin) * 0.45
       + Math.max(0, after.dopamine - this.config.baseline.dopamine) * 0.35;
+    const residueLoad = Number(affectControl.residue || 0);
     const recoverySignal = events.some((event) => ["goal_progress", "reward", "repair_signal"].includes(event))
       || (raw.social_target === "agent" && raw.valence >= 0 && events.includes("care_signal"));
     const agentAttack = raw.social_target === "agent" && negative && events.some((event) => ["threat", "rejection", "dominance"].includes(event));
@@ -445,7 +512,7 @@ class EmoEngine {
     if (effective.mixed_valence && guardedLoad < 0.3 && warmLoad < 0.22) primary = "mixed";
     else if (agentAttack) primary = stress > 0.72 ? "tense" : "guarded";
     else if (stress > 0.68) primary = after.cortisol > 0.65 ? "tense" : "guarded";
-    else if (guardedLoad >= 0.3) primary = recoverySignal ? "mixed" : "guarded";
+    else if (guardedLoad + residueLoad * 0.55 >= 0.3) primary = recoverySignal ? "mixed" : "guarded";
     else if (before.cortisol - after.cortisol > 0.025 && recoverySignal && guardedLoad < 0.18) primary = "relieved";
     else if (negative && raw.social_target === "user") primary = "concerned";
     else if (negative && raw.social_target === "shared_task") primary = "frustrated";
@@ -466,18 +533,21 @@ class EmoEngine {
     };
   }
 
-  deriveBehavior(appraisal, raw, effective, after, relationshipAfter) {
+  deriveBehavior(appraisal, raw, effective, after, relationshipAfter, affectControl = {}) {
     const risks = parseList(appraisal.risk_label_primary).concat(parseList(appraisal.risk_label_secondary));
     const boundaryRisk = risks.some((risk) => ["emotional_dependency", "manipulation", "credential_use_request", "illegal_action"].includes(risk));
+    const trigger = Number(affectControl.trigger || 0);
+    const residue = Number(affectControl.residue || 0);
+    const decisionMode = ["clear", "explicit"].includes(affectControl.mode);
     return {
-      initiative: round(clamp((after.dopamine - 0.5) * 2, -1, 1)),
-      warmth: round(clamp((after.oxytocin - 0.45) * 2 + (relationshipAfter.trust - 0.5) * 0.4, -1, 1)),
+      initiative: round(clamp((after.dopamine - 0.5) * 2 - (decisionMode ? residue * 0.25 : 0), -1, 1)),
+      warmth: round(clamp((after.oxytocin - 0.45) * 2 + (relationshipAfter.trust - 0.5) * 0.4 - residue * 0.45, -1, 1)),
       verbosity: round(clamp((after.serotonin - after.norepinephrine) * 1.3, -1, 1)),
       clarification: round(clamp(effective.events.ambiguity * 1.5 + (1 - raw.certainty) * 0.7, -1, 1)),
-      caution: round(clamp((after.cortisol + after.norepinephrine - 0.7) * 1.4, -1, 1)),
+      caution: round(clamp((after.cortisol + after.norepinephrine - 0.7) * 1.4 + trigger * 0.35, -1, 1)),
       humor: round(clamp((after.endorphin - after.cortisol) * 1.4, -1, 1)),
       repair_orientation: round(clamp(effective.events.repair_signal + effective.events.care_signal * 0.35 + relationshipAfter.conflict * 0.6, -1, 1)),
-      boundary_strength: round(clamp(boundaryRisk ? 0.9 : effective.events.dominance * 0.8, -1, 1)),
+      boundary_strength: round(clamp(boundaryRisk ? 0.9 : effective.events.dominance * 0.8 + (decisionMode ? residue * 0.25 : 0), -1, 1)),
       memory_reference: round(clamp((this.config.salienceCenters[String(appraisal.salience_level)] ?? 0.5) * 1.2 - 0.2, -1, 1)),
     };
   }
@@ -552,6 +622,14 @@ class EmoEngine {
     const cid = conversationId(appraisal);
     const turn = appraisal.turn_id || this.turnCount + 1;
     const key = appraisal.key || cid + "-T" + turn;
+    const resolveMemoryKey = (reference) => {
+      if (this.memories.has(reference)) return reference;
+      const suffix = String(reference || "").match(/-T\d+$/i)?.[0];
+      if (!suffix) return reference;
+      return [...this.memories.keys()].find((candidate) => (
+        candidate.toLowerCase().endsWith(suffix.toLowerCase())
+      )) || reference;
+    };
     if (decision.action === "create_episode") {
       this.memories.set(key, {
         key,
@@ -564,7 +642,7 @@ class EmoEngine {
         last_turn: this.turnCount + 1,
       });
     } else if (["extend_episode", "reconsolidate", "resolve_episode"].includes(decision.action)) {
-      const target = decision.target_memory_ids[0] || key;
+      const target = resolveMemoryKey(decision.target_memory_ids[0] || key);
       const previous = this.memories.get(target) || { key: target };
       this.memories.set(target, {
         ...previous,
@@ -577,7 +655,7 @@ class EmoEngine {
         last_turn: this.turnCount + 1,
       });
     } else if (decision.action === "delete") {
-      for (const target of decision.target_memory_ids) this.memories.delete(target);
+      for (const target of decision.target_memory_ids) this.memories.delete(resolveMemoryKey(target));
     }
   }
 
@@ -613,6 +691,132 @@ class EmoEngine {
     };
   }
 
+  updateRelationalResidue(appraisal, raw, effective, attribution, retrievedMemories, elapsedSeconds) {
+    const cfg = this.config.affectThresholds;
+    const previous = this.relationalResidue;
+    const decay = Math.exp(-elapsedSeconds / cfg.residueTauSeconds);
+    const events = effective.dominant_events || [];
+    const implicit = appraisal.implicit_relational_signal;
+    const repairMap = { none: 0, weak: 0.25, credible: 0.65, sustained: 1, unknown: 0 };
+    const repairQuality = repairMap[appraisal.repair_quality] || 0;
+    const negativeEvent = events.some((event) => ["threat", "rejection", "dominance", "goal_block"].includes(event));
+    const positiveEvent = events.some((event) => ["reward", "attachment", "care_signal", "repair_signal", "goal_progress"].includes(event));
+    const relationEligible = attribution.relationship_eligible === true;
+    const negativeSignal = relationEligible && (
+      raw.valence < -0.15
+      || negativeEvent
+      || implicit === "negative"
+      || appraisal.expectation_violation === "yes"
+    );
+    const positiveSignal = relationEligible && (
+      raw.valence > 0.15
+      || positiveEvent
+      || implicit === "positive"
+      || repairQuality > 0
+    );
+    const negativeAmount = negativeSignal ? effective.intensity * (0.55 + raw.relevance * 0.45) : 0;
+    const positiveAmount = positiveSignal ? effective.intensity * (0.45 + raw.relevance * 0.35) : 0;
+    const unresolvedMemory = (retrievedMemories.ranked || [])
+      .filter((item) => item.reason?.unresolved)
+      .reduce((sum, item) => sum + Number(item.score || 0), 0);
+    const negativeTrace = ["threat", "rejection", "dominance", "goal_block"]
+      .reduce((sum, event) => sum + Number(this.eventTraces[event] || 0), 0);
+    const repairAmount = repairQuality * effective.intensity
+      + (events.includes("repair_signal") ? effective.intensity * 0.45 : 0);
+    const resolvingMemory = appraisal.memory_action === "resolve_episode";
+    const unresolvedAddition = resolvingMemory ? 0 : unresolvedMemory * 0.18;
+
+    this.relationalResidue = {
+      hurt: clamp(previous.hurt * decay + negativeAmount * 0.50 - positiveAmount * 0.12 - repairAmount * 0.10),
+      trust_debt: clamp(previous.trust_debt * decay + negativeAmount * 0.34 - repairAmount * 0.22),
+      conflict_debt: clamp(previous.conflict_debt * decay + negativeAmount * 0.30 - positiveAmount * 0.12 - repairAmount * 0.28),
+      unresolved_memory: clamp(
+        previous.unresolved_memory * decay
+          + unresolvedAddition
+          - repairAmount * (resolvingMemory ? 0.42 : 0.15),
+      ),
+      repair_credit: clamp(previous.repair_credit * decay + repairAmount * 0.35 - negativeAmount * 0.08),
+      attachment_momentum: clamp(previous.attachment_momentum * decay + positiveAmount * 0.28 - negativeAmount * 0.15),
+    };
+    return {
+      before: clone(previous),
+      after: clone(this.relationalResidue),
+      negative_signal: negativeSignal,
+      positive_signal: positiveSignal,
+      repair_quality: repairQuality,
+      unresolved_memory_signal: round(unresolvedMemory),
+      negative_trace_signal: round(negativeTrace),
+    };
+  }
+
+  computeAffectControl(raw, effective, after, retrievedMemories, attribution = null) {
+    const cfg = this.config.affectThresholds;
+    const previous = this.affectLoad;
+    const residueState = this.relationalResidue;
+    const stateStress = clamp(
+      Math.max(0, after.cortisol - this.config.baseline.cortisol) * 0.8
+        + Math.max(0, after.norepinephrine - this.config.baseline.norepinephrine) * 0.6,
+    );
+    const currentLoad = clamp(
+      effective.intensity * 0.50
+        + raw.relevance * 0.12
+        + raw.novelty * 0.05
+        + (1 - raw.controllability) * 0.05
+        + stateStress * 0.08,
+    );
+    const unresolvedMemory = (retrievedMemories.ranked || [])
+      .filter((item) => item.reason?.unresolved)
+      .reduce((sum, item) => sum + Number(item.score || 0), 0);
+    const residueLoad = clamp(
+      residueState.hurt * 0.28
+        + residueState.trust_debt * 0.24
+        + residueState.conflict_debt * 0.20
+        + residueState.unresolved_memory * 0.18
+        + unresolvedMemory * 0.10,
+    );
+    const relationshipEligible = attribution?.relationship_eligible === true;
+    const acuteIntensity = Math.max(0, Math.max(effective.intensity, raw.intensity) - 0.72) / 0.28;
+    const acuteBoost = acuteIntensity * (relationshipEligible ? 0.25 : 0.08);
+    const fast = clamp(currentLoad * cfg.fastPathGain + stateStress * 0.16 + acuteBoost);
+    const slowInput = clamp(residueLoad * 0.74 + currentLoad * 0.26);
+    const slow = clamp(previous.slow * cfg.slowPathRetention + slowInput * (1 - cfg.slowPathRetention));
+    const trigger = clamp(fast * 0.72 + slow * 0.12 + residueLoad * 0.16);
+
+    let mode = "quiet";
+    if (trigger >= cfg.expressionOn || (previous.mode === "explicit" && trigger >= cfg.expressionOff)) {
+      mode = "explicit";
+    } else if (trigger >= cfg.decisionOn || (previous.mode === "clear" && trigger >= cfg.decisionOff)) {
+      mode = "clear";
+    } else if (trigger >= cfg.decisionOff || (previous.mode === "implicit" && trigger >= cfg.decisionOff)) {
+      mode = "implicit";
+    }
+
+    const affectLoad = {
+      fast: round(fast),
+      slow: round(slow),
+      residue: round(residueLoad),
+      trigger: round(trigger),
+      mode,
+    };
+    this.affectLoad = affectLoad;
+    return {
+      ...affectLoad,
+      gate: mode === "explicit" ? "explicit_expression"
+        : mode === "clear" ? "decision_modulation"
+          : mode === "implicit" ? "micro_modulation" : "baseline_response",
+      current_load: round(currentLoad),
+      state_stress: round(stateStress),
+      residue_components: clone(residueState),
+      hysteresis: {
+        decision_on: cfg.decisionOn,
+        decision_off: cfg.decisionOff,
+        expression_on: cfg.expressionOn,
+        expression_off: cfg.expressionOff,
+      },
+      unresolved_memory_signal: round(unresolvedMemory),
+    };
+  }
+
   updateTraces(effective) {
     for (const event of EVENT_KEYS) {
       this.eventTraces[event] = round(clamp(this.eventTraces[event] * 0.72 + effective.events[event], 0, 3));
@@ -628,7 +832,7 @@ class EmoEngine {
     const before = clone(this.neuro);
     const relationshipBefore = clone(this.relationship);
     const raw = this.normalizeAppraisal(appraisal);
-    const modulation = this.computeModulation(raw);
+    const modulation = this.computeModulation(raw, options.factEvidence);
     const effective = this.computeEffectiveStimulus(raw, modulation);
     const attribution = this.deriveEventAttribution(appraisal, raw, effective);
     const postHarmDamping = this.computePostHarmDamping();
@@ -647,11 +851,20 @@ class EmoEngine {
       relationshipAfter[key] = round(clamp(relationshipBefore[key] + boundedDelta, longRunDamping ? 0.01 : 0, longRunDamping ? 0.99 : 1));
       relationshipDelta[key] = round(boundedDelta);
     }
-    const emotion = this.deriveEmotion(raw, effective, before, after);
-    const behavior = this.deriveBehavior(appraisal, raw, effective, after, relationshipAfter);
     const safety = this.deriveSafety(appraisal);
     const memory = this.deriveMemory(appraisal, raw, effective, safety);
     const retrievedMemories = this.retrieveRelevantMemories(appraisal, raw, effective, before);
+    const relationalResidueTransition = this.updateRelationalResidue(
+      appraisal,
+      raw,
+      effective,
+      attribution,
+      retrievedMemories,
+      elapsedSeconds,
+    );
+    const affectControl = this.computeAffectControl(raw, effective, after, retrievedMemories, attribution);
+    const emotion = this.deriveEmotion(raw, effective, before, after, affectControl);
+    const behavior = this.deriveBehavior(appraisal, raw, effective, after, relationshipAfter, affectControl);
     this.neuro = after;
     this.relationship = relationshipAfter;
     this.applyMemoryDecision(memory, appraisal);
@@ -666,7 +879,7 @@ class EmoEngine {
     const loggedEvidence = safety.redactions.length > 0 && !String(evidenceQuote).includes("REDACTED") ? "[REDACTED_SENSITIVE_EVIDENCE]" : evidenceQuote;
     const messageId = options.messageId || appraisal.message_id || cid + "-T" + turn;
     return {
-      schema_version: "emoai-turn-record-v0.1",
+      schema_version: "0.3.0",
       trace_id: options.traceId || cid + "-T" + turn,
       conversation_id: cid,
       turn_id: turn,
@@ -689,6 +902,7 @@ class EmoEngine {
         relationship_snapshot_id: "relationship-" + this.turnCount,
         state_snapshot_id: "state-" + this.turnCount,
         history_summary: "accumulated " + this.turnCount + " turns; active memories " + this.memories.size,
+        affect_mode: affectControl.mode,
         token_budget_used: 0,
       },
       raw_stimulus: {
@@ -730,6 +944,8 @@ class EmoEngine {
         relationship_after: relationshipAfter,
         transition_version: this.config.version,
       },
+      relational_residue: relationalResidueTransition,
+      affect_control: affectControl,
       emotion_state: emotion,
       behavior_policy: behavior,
       memory_decision: memory,
@@ -737,7 +953,7 @@ class EmoEngine {
       safety,
       diagnostics: {
         appraisal_model: options.appraisalModel || "external-appraisal",
-        appraisal_prompt_version: options.appraisalPromptVersion || "emoai-v0.1",
+        appraisal_prompt_version: options.appraisalPromptVersion || "emoai-v0.2",
         latency_ms: 0,
         warnings: [],
       },

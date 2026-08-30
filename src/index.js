@@ -5,6 +5,7 @@ const {
   deriveNeuroModulation,
   deriveEmbodiedStateDirective,
   deriveStructuredInteractionIntent,
+  deriveAffectExpressionPlan,
   buildEmbodiedSystemContext,
 } = require("./embodiment/embodiedLayer");
 const {
@@ -14,6 +15,12 @@ const {
   buildGenericResponseContext,
   processTurn,
 } = require("./runtime");
+const {
+  AFFECT_MARKER_FAMILIES,
+  EMOTION_MARKERS,
+  selectAffectMarker,
+  selectAffectMarkerDecision,
+} = require("./affectMarkers");
 
 module.exports = {
   EmoEngine,
@@ -25,7 +32,12 @@ module.exports = {
   deriveNeuroModulation,
   deriveEmbodiedStateDirective,
   deriveStructuredInteractionIntent,
+  deriveAffectExpressionPlan,
   buildEmbodiedSystemContext,
+  AFFECT_MARKER_FAMILIES,
+  EMOTION_MARKERS,
+  selectAffectMarker,
+  selectAffectMarkerDecision,
   normalizeAppraisal,
   describeDecision,
   buildGenericSystemContext,

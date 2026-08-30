@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://emoai.dev/schemas/model_appraisal_prediction.schema.json",
-  "title": "EmoAI Generic Appraisal Prediction v0.1",
+  "title": "EmoAI Generic Appraisal Prediction v0.2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -50,6 +50,11 @@
     "primary_target": { "$ref": "#/$defs/target" },
     "causal_agent": { "$ref": "#/$defs/actor" },
     "relationship_target": { "$ref": "#/$defs/actor" },
+    "expectation_violation": { "enum": ["yes", "no", "unknown"] },
+    "implicit_relational_signal": { "enum": ["positive", "negative", "mixed", "none", "unknown"] },
+    "prior_event_reference": { "type": ["string", "null"] },
+    "repair_quality": { "enum": ["none", "weak", "credible", "sustained", "unknown"] },
+    "attribution_confidence": { "$ref": "#/$defs/level04" },
     "primary_event": { "$ref": "#/$defs/event" },
     "primary_event_level": { "$ref": "#/$defs/level03" },
     "secondary_event_1": { "oneOf": [{ "$ref": "#/$defs/event" }, { "type": "null" }] },

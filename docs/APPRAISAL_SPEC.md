@@ -1,4 +1,4 @@
-# Appraisal Specification v0.1
+# Appraisal Specification v0.2
 
 The engine expects one structured appraisal object per user turn or product event. The appraisal maps context into affect-relevant variables. It should be produced by a classifier, rules, human annotation, or an LLM appraiser.
 
@@ -11,6 +11,11 @@ The engine expects one structured appraisal object per user turn or product even
 - certainty_level: confidence in the appraisal.
 - controllability_level: how controllable or actionable the event appears.
 - mixed_valence: whether positive and negative signals coexist.
+- expectation_violation: whether the turn violates a previously established expectation.
+- implicit_relational_signal: whether the relational meaning is positive, negative, mixed, absent, or unknown.
+- prior_event_reference: an id or compact key for a relevant prior event or memory.
+- repair_quality: none, weak, credible, or sustained.
+- attribution_confidence: confidence that the inferred cause and relationship target are correct.
 
 ## Targets
 
@@ -29,6 +34,8 @@ Optional attribution fields:
 - relationship_target: whose relationship with the agent should be updated.
 
 Relationship changes should usually require primary_target agent and relationship_target user.
+
+Low-confidence attribution should produce only small affect and relationship changes. Do not convert ambiguity into a confident interpersonal injury.
 
 ## Events
 

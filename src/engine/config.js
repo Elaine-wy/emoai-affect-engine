@@ -24,8 +24,8 @@ const EVENT_KEYS = [
 const RELATIONSHIP_KEYS = ["trust", "familiarity", "affection", "conflict", "security"];
 
 const DEFAULT_CONFIG = {
-  version: "emo-engine-v0.1.0",
-  matrixVersion: "event-neuro-matrix-v0.1.0",
+  version: "emo-engine-v0.2.1",
+  matrixVersion: "event-neuro-matrix-v0.2.0",
   baseline: {
     dopamine: 0.5,
     serotonin: 0.58,
@@ -134,6 +134,16 @@ const DEFAULT_CONFIG = {
     globalGain: 1,
     eventSensitivity: Object.fromEntries(EVENT_KEYS.map((key) => [key, 1])),
     recoveryMultiplier: 1,
+  },
+  affectThresholds: {
+    decisionOn: 0.36,
+    decisionOff: 0.22,
+    expressionOn: 0.575,
+    expressionOff: 0.47,
+    fastPathGain: 1.08,
+    slowPathRetention: 0.72,
+    residueTauSeconds: 172800,
+    residueCarryGain: 0.35,
   },
 };
 
