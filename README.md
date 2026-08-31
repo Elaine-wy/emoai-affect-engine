@@ -48,6 +48,20 @@ Run `npm run smoke` and `node scripts/regression.js`.
 
 The runtime reads JSON from stdin and writes JSON to stdout.
 
+## Frontend Test Workbench
+
+The `frontend/` directory contains a React + MUI test workbench for talking to an OpenAI-compatible model while inspecting affect state.
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173/`. The first launch asks for the model port/address, model name, and access key; these values are cached in the browser so later launches only need the start button. The chat view keeps its own scroll area, while the right-hand panel shows the appraisal, affect control, relationship, memory, request, and response diagnostics. The Vite development server exposes `/api/affect` for the local engine and `/api/chat` as a same-origin proxy to avoid browser CORS failures.
+
+The model endpoint is expected to implement `POST /v1/chat/completions`. A static build can still call the model directly, but the local affect bridge is only available when running the Vite development server.
+
 ## Programmatic Use
 
 Use processTurn from src/runtime.js. Persist result.state and pass it back as payload.state on the next turn.
